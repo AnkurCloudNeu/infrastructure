@@ -5,37 +5,42 @@ Parameters:
   VPCCIDR:
     Description: Please enter the IP range (CIDR notation) for this VPC
     Type: String
-    Default: 10.0.0.0/16
+    Default: 10.192.0.0/16
 
-  PublicSubnetACIDR:
+  SubnetACIDR:
     Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
     Type: String
-    Default: 10.0.10.0/24
+    Default: 10.192.10.0/24
 
-  PublicSubnetBCIDR:
-    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+  AMIId:
+    Description: Id of AMI
     Type: String
-    Default: 10.0.11.0/24
+    Default: ami-08189dfbfdc561f75
 
-  PublicSubnetCCIDR:
-    Description: Please enter the IP range (CIDR notation) for the public subnet in the third Availability Zone
+  RootVolumeSize:
+    Description: Volume Size
     Type: String
-    Default: 10.0.12.0/24
+    Default: 50
+
+  RootVolumeType:
+    Description: Volume Type
+    Type: String
+    Default: gp2
+
+  InstanceType:
+    Description: Instance Type
+    Type: String
+    Default: t2.micro
+
+  DeleteOnTermin:
+    Description: Delete on Termination
+    Type: String
+    Default: true
 
   AvailabilityZoneA:
     Description: Zone A
     Type: Number
     Default: 0
-
-  AvailabilityZoneB:
-    Description: Zone B
-    Type: Number
-    Default: 1
-
-  AvailabilityZoneC:
-    Description: Zone C
-    Type: Number
-    Default: 2
 
 Resources:
   # vpc
@@ -52,40 +57,64 @@ Resources:
   # connects to public network
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-    # DependsOn: VPC
+    DependsOn: VPC
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  PublicSubnetA:
+  SubnetA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Ref PublicSubnetACIDR
+      CidrBlock: !Ref SubnetACIDR
       AvailabilityZone: !Select [!Ref AvailabilityZoneA, !GetAZs ] # Get the first AZ in the list
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-Public-A
-  PublicSubnetB:
-    Type: AWS::EC2::Subnet
+
+  WebAppInstance:
+    Type: "AWS::EC2::Instance"
     Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Ref PublicSubnetBCIDR
-      AvailabilityZone: !Select [!Ref AvailabilityZoneB, !GetAZs ] # Get the second AZ in the list
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-Public-B
-  PublicSubnetC:
-    Type: AWS::EC2::Subnet
+      ImageId: !Ref AMIId
+      InstanceType: !Ref InstanceType
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - Ref: "InstanceSecurityGroup"
+          SubnetId:
+            Ref: "SubnetA"
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref RootVolumeSize
+            DeleteOnTermination: !Ref DeleteOnTermin
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupName: "application"
+      GroupDescription: "Allow HTTP/HTTPS and SSH and port 8080"
       VpcId: !Ref VPC
-      CidrBlock: !Ref PublicSubnetCCIDR
-      AvailabilityZone: !Select [!Ref AvailabilityZoneC, !GetAZs ] # Get the third AZ in the list
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-Public-C
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: "443"
+          ToPort: "443"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: "22"
+          ToPort: "22"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: "8080"
+          ToPort: "8080"
+          CidrIp: 0.0.0.0/0
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -94,6 +123,7 @@ Resources:
       Tags:
         - Key: Name
           Value: Public
+
   PublicRoute1:
     Type: AWS::EC2::Route
     DependsOn: AttachGateway
@@ -102,28 +132,8 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetBRouteTableAssociation:
+  SubnetARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnetB
+      SubnetId: !Ref SubnetA
       RouteTableId: !Ref PublicRouteTable
-  PublicSubnetCRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnetC
-      RouteTableId: !Ref PublicRouteTable
-  PublicSubnetARouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnetA
-      RouteTableId: !Ref PublicRouteTable
-
-Outputs:
-  VPC:
-    Description: A reference to the created VPC
-    Value: !Ref VPC
-
-  PublicSubnets:
-    Description: A list of the public subnets
-    Value:
-      !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB, !Ref PublicSubnetC]]
