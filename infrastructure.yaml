@@ -15,7 +15,12 @@ Parameters:
   AMIId:
     Description: Id of AMI
     Type: String
-    Default: ami-039323a9add4a59e4
+    Default: ami-05d7e3eccbcbcef69
+
+  HostedZoneName:
+    Description: Hosted Zone Name
+    Type: String
+    Default: dev.ankur.solutions
 
   RootVolumeSize:
     Description: Volume Size
@@ -166,8 +171,10 @@ Resources:
          Fn::Base64: 
           !Sub |
             #!/bin/bash=
-            jq -n --arg greeting GoodMorning '{"Database":${DBinstance.Endpoint.Address}, "MasterUsername": "csye6225", "MasterPassword": "csye6225", "DatabasePort": "5432", "DatabaseName": "csye6225"}' > home/ubuntu/WebApp.CloudApi/sample.json
-            cd home/ubuntu/
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
+            jq -n --arg greeting GoodMorning '{"Database":${DBinstance.Endpoint.Address}, "MasterUsername": "csye6225", "MasterPassword": "csye6225", "DatabasePort": "5432", "DatabaseName": "csye6225"}' > home/ubuntu/webapp/WebApp.CloudApi/sample.json
+            cd home/ubuntu/webapp
+            dotnet tool install --global dotnet-ef
             dotnet ef migrations add InitialCreate --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
             dotnet ef database update --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
             sudo systemctl enable webapp.service
@@ -404,3 +411,13 @@ Resources:
     DependsOn: AttachGateway
     Properties:
       Domain: vpc
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Ref "HostedZoneName"
+      Comment: DNS name for my instance.
+      Name: !Ref "HostedZoneName"
+      Type: A
+      TTL: "900"
+      ResourceRecords:
+        - !GetAtt WebAppInstance.PublicIp    
