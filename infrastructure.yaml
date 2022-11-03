@@ -167,10 +167,7 @@ Resources:
          Fn::Base64: 
           !Sub |
             #!/bin/bash=
-            export BucketName=${!Join ["", [!Ref "AWS::StackName", "-bucket-s3"]]}
-            jq -n --arg greeting GoodMorning '{"Database":${DBinstance.Endpoint.Address}, 
-            "MasterUsername": "csye6225", "MasterPassword": "csye6225", "DatabasePort": "5432", 
-            "DatabaseName": "csye6225"}' > home/ubuntu/WebApp.CloudApi/sample.json
+            jq -n --arg greeting GoodMorning '{"Database":${DBinstance.Endpoint.Address}, "MasterUsername": "csye6225", "MasterPassword": "csye6225", "DatabasePort": "5432", "DatabaseName": "csye6225"}' > home/ubuntu/WebApp.CloudApi/sample.json
             cd home/ubuntu/
             dotnet ef migrations add InitialCreate --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
             dotnet ef database update --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
