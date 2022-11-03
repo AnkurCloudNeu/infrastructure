@@ -15,7 +15,12 @@ Parameters:
   AMIId:
     Description: Id of AMI
     Type: String
-    Default: ami-039323a9add4a59e4
+    Default: ami-00e98c4d9284d04df
+
+  HostedZoneName:
+    Description: Hosted Zone Name
+    Type: String
+    Default: prod.ankur.solutions.
 
   RootVolumeSize:
     Description: Volume Size
@@ -166,11 +171,19 @@ Resources:
          Fn::Base64: 
           !Sub |
             #!/bin/bash=
-            jq -n --arg greeting GoodMorning '{"Database":${DBinstance.Endpoint.Address}, "MasterUsername": "csye6225", "MasterPassword": "csye6225", "DatabasePort": "5432", "DatabaseName": "csye6225"}' > home/ubuntu/WebApp.CloudApi/sample.json
-            cd home/ubuntu/
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
+            cd /home/ubuntu/webapp/WebApp.CloudApi
+            rm -f .env
+            echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${!Join ["", [!Ref "AWS::StackName", "-bucket-s3"]]}\nDatabaseName=${!Ref DBInstanceIdentifier}\nMasterUsername=${!Ref DBInstanceIdentifier}\nMasterPassword=${!Ref DBInstanceIdentifier}\nDatabasePort=5432\n" >> .env
+            rm -r -f bin
+            cd ../
+            dotnet tool install --global dotnet-ef
             dotnet ef migrations add InitialCreate --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
             dotnet ef database update --project ./WebApp.CloudApi/WebApp.CloudApi.csproj
+            dotnet publish ./WebApp.CloudApi/WebApp.CloudApi.csproj --configuration Release
             sudo systemctl enable webapp.service
+            sudo systemctl start webapp.service
+            sudo systemctl status webapp.service
 
   S3EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -404,3 +417,13 @@ Resources:
     DependsOn: AttachGateway
     Properties:
       Domain: vpc
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Ref "HostedZoneName"
+      Comment: DNS name for my instance.
+      Name: !Ref "HostedZoneName"
+      Type: A
+      TTL: "900"
+      ResourceRecords:
+        - !GetAtt WebAppInstance.PublicIp    
