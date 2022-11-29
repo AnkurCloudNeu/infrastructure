@@ -15,12 +15,12 @@ Parameters:
   AMIId:
     Description: Id of AMI
     Type: String
-    Default: ami-02656defd41adc234
+    Default: ami-0006ba73f5ce9c612
 
   HostedZoneName:
     Description: Hosted Zone Name
     Type: String
-    Default: sandbox.ankur.solutions.
+    Default: prod.ankur.solutions.
 
   RootVolumeSize:
     Description: Volume Size
@@ -175,14 +175,13 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          sudo yum install amazon-cloudwatch-agent
-          sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
           cd /home/ubuntu/webapp/WebApp.CloudApi
           rm -f .env
-          echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${AWS::StackName}-bucket-s3\nDatabaseName=${DBInstanceIdentifier}\nMasterUsername=${DBInstanceIdentifier}\nMasterPassword=${DBInstanceIdentifier}\nDatabasePort=5432\SNSName=${CloudFormationSNS}\n" >> .env
+          echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${AWS::StackName}-test-bucket-s3\nDatabaseName=${DBInstanceIdentifier}\nMasterUsername=${DBInstanceIdentifier}\nMasterPassword=${DBInstanceIdentifier}\nDatabasePort=5432\nSNSName=arn:aws:sns:us-east-1:954333181119:csye6225-sns\n" >> .env
           dotnet publish WebApp.CloudApi.csproj --configuration Release
           sudo systemctl enable webapp.service
           sudo systemctl start webapp.service
+          sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
           sudo systemctl status webapp.service
     
   S3EC2InstanceProfile:
@@ -208,7 +207,7 @@ Resources:
               - sts:AssumeRole
       Path: /
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy      
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
   EC2InstanceS3Policy:
     Type: AWS::IAM::Policy
@@ -219,41 +218,117 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - 's3:DeleteObject'
-              - 's3:DeleteObjectVersion'            
-              - 's3:GetObject'
-              - 's3:GetObjectAcl'
-              - 's3:GetObjectVersion'
-              - 's3:PutObject'
-              - 's3:PutObjectAcl'
+              - s3:*
             Resource:
               - !Sub arn:aws:s3:::${EncryptedS3Bucket}
               - !Sub arn:aws:s3:::${EncryptedS3Bucket}/*
-
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:BatchWrite
+              - dynamodb:CreateTable
+              - dynamodb:Delete
+              - dynamodb:Update
+              - dynamodb:PutItem
+            Resource: !GetAtt DynamoDBTable.Arn
       Roles:
         - !Ref S3EC2InstanceRole
 
-  myInlinePolicyForDynamoDB:
-    Type: 'AWS::IAM::Policy'
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      PolicyName: WebAppDynamo # (required) give a name to this policy
-      PolicyDocument: # (required) JSON policy document
-        Version: '2012-10-17'
-        Statement: # allow read only access to all S3 buckets
-          - Effect: Allow
-            Action:
-              - 'dynamodb:PutItem'
-              - 'dynamodb:DescribeTable'
-              - 'dynamodb:DeleteItem'
-              - 'dynamodb:GetItem'
-              - 'dynamodb:Scan'
-              - 'dynamodb:Query'
-              - 'dynamodb:UpdateItem'
-            Resource:
-            - !Join  ["",[!GetAtt myDynamoDBTable.Arn]]
-      Roles:
-        -
-          !Ref S3EC2InstanceRole
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+
+      ProvisionedThroughput:
+        ReadCapacityUnits: "1"
+        WriteCapacityUnits: "1"
+      TableName: "csye6225"
+      TimeToLiveSpecification:
+        AttributeName: "expiry"
+        Enabled: true
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambda-role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: lambda-role-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource: "arn:aws:ses:us-east-1:954333181119:identity/prod.ankur.solutions"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:::*
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:DeleteItem"
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Scan"
+                Resource: !GetAtt DynamoDBTable.Arn
+  
+  Lambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: lambda-function
+      Runtime: nodejs16.x
+      Code:
+        S3Bucket: "serverless-test-01"
+        S3Key: "Lambda.zip"
+      Handler: index.handler
+      Timeout: 600
+      MemorySize: 1024
+      EphemeralStorage:
+        Size: 1024
+      Role: !GetAtt LambdaRole.Arn
+
+  LambdaFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref Lambda
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SNSTopic
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !GetAtt Lambda.Arn
+          Protocol: lambda
+      TopicName: "csye6225-sns"
+
+  Subscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt Lambda.Arn
+      Protocol: "lambda"
+      TopicArn: !Ref SNSTopic
 
   myInlinePolicyForSNS:
     Type: 'AWS::IAM::Policy'
@@ -269,50 +344,7 @@ Resources:
             - !Join  ["",[!Ref MySNSTopic]]
       Roles:
         -
-          !Ref S3EC2InstanceRole
-
-      
-
-  myInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties: 
-      InstanceProfileName: my-ec2-instance-profile
-      Path: /
-      Roles: 
-       - !Ref S3EC2InstanceRole
-
-  myIAMRole:
-    Type: AWS::IAM::Role
-    Properties: 
-      Description: IAM role for EC2 with 
-      RoleName: EC2-CSYE6225  
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          -
-            Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Path: /   
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
-
-
-  myDNSRecord2:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref HostedZoneID
-      Name: !Ref MyDNSName
-      Type: A
-      TTL: '900'
-      ResourceRecords:
-        - Fn::GetAtt:
-            - WebAppInstance
-            - PublicIp
-  
+          !Ref S3EC2InstanceRole 
 
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -363,10 +395,11 @@ Resources:
   EncryptedS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Join ["", [!Ref "AWS::StackName", "-bucket-s3"]]
+      BucketName: !Join ["", [!Ref "AWS::StackName", "-test-bucket-s3"]]
       LifecycleConfiguration:
         Rules:
           - Id: TransitionRule
+            Prefix: logs
             Status: Enabled
             Transitions:
               - TransitionInDays: 30
@@ -424,103 +457,6 @@ Resources:
       VPCSecurityGroups:
         - !Ref DBEC2SecurityGroup
     DeletionPolicy: "Snapshot"
-
-  myDynamoDBTable:
-    Type: AWS::DynamoDB::Table
-    Properties: 
-      AttributeDefinitions: 
-        - 
-          AttributeName: "email"
-          AttributeType: "S"
-      KeySchema:
-        - AttributeName: "email"
-          KeyType: "HASH"
-      ProvisionedThroughput: 
-        ReadCapacityUnits: "1"
-        WriteCapacityUnits: "1"
-      TableName: "auth"
-      TimeToLiveSpecification: 
-          AttributeName: "ttl"
-          Enabled: true
-  
-  LambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName:
-        Fn::Sub: lambda-role
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-            - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-              - lambda.amazonaws.com	
-      
-      Path: /
-      Policies:
-        - PolicyName: "cloudformation-lambda-role-policy"
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: "Allow"
-                Action:
-                  - "ses:SendEmail"
-                Resource: "arn:aws:ses:us-east-1:007906344080:identity/*"
-              - Effect: "Allow"
-                Action:
-                  - "logs:CreateLogGroup"	
-                  - "logs:CreateLogStream"	
-                  - "logs:PutLogEvents"	
-                Resource: "arn:aws:logs:*:*:*"
-  LambdaFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: cloudformation-lambda
-      Runtime: dotnet
-      Code: 
-        S3Bucket: "webapp-jarfile-bucket"
-        S3Key: SNSWeb.dll
-      Handler: main.java.handler.LambdaHandler::handleRequest
-      Timeout: 600
-      MemorySize: 1024
-      EphemeralStorage: 
-          Size: 1024
-      Role:
-        Fn::GetAtt:
-          - LambdaRole
-          - Arn	
-      Environment:
-        Variables:
-          domain: prod.
-          region: US_EAST_1
-  LambdaFunctionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt LambdaFunction.Arn
-      Principal: sns.amazonaws.com
-      SourceArn: !Ref 'MySNSTopic'
-  MySNSTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      Subscription:
-        - Endpoint:
-            Fn::GetAtt:
-              - "LambdaFunction"
-              - "Arn"
-          Protocol: "lambda"
-      TopicName: !Ref CloudFormationSNS
-  
-  MySubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      Endpoint:
-        Fn::GetAtt:
-              - "LambdaFunction"
-              - "Arn"
-      Protocol: "lambda"
-      TopicArn: !Ref 'MySNSTopic'
 
   # Private Subnets
   PrivateSubnet1:
