@@ -341,7 +341,7 @@ Resources:
             Action:
               - 'sns:Publish'
             Resource:
-            - !Join  ["",[!Ref MySNSTopic]]
+            - !Join  ["",[!Ref SNSTopic]]
       Roles:
         -
           !Ref S3EC2InstanceRole 
