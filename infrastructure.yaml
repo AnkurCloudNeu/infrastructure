@@ -12,15 +12,30 @@ Parameters:
     Type: String
     Default: 10.192.10.0/24
 
+  SubnetBCIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.11.0/24
+
+  SubnetCCIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.12.0/24
+
   AMIId:
     Description: Id of AMI
     Type: String
-    Default: ami-0006ba73f5ce9c612
+    Default: ami-09ef4311235c71091
 
   HostedZoneName:
     Description: Hosted Zone Name
     Type: String
     Default: prod.ankur.solutions.
+
+  HostedZoneID:
+    Type: String
+    Description: The DNS ID of an existing Amazon Route 53 hosted zone
+    Default: Z06172991P0RABJ9ZV39J
 
   RootVolumeSize:
     Description: Volume Size
@@ -151,38 +166,61 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref SubnetACIDR
-      AvailabilityZone: !Select [!Ref AvailabilityZoneA, !GetAZs ] # Get the first AZ in the list
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-Public-A
 
-  WebAppInstance:
-    Type: "AWS::EC2::Instance"
+  SubnetB:
+    Type: AWS::EC2::Subnet
     Properties:
-      ImageId: !Ref AMIId
-      InstanceType: !Ref InstanceType
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: true
-          DeviceIndex: "0"
-          GroupSet: [!Ref InstanceSecurityGroup]
-          SubnetId: !Ref SubnetA
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref RootVolumeSize
-            DeleteOnTermination: !Ref DeleteOnTermin
-      IamInstanceProfile: !Ref S3EC2InstanceProfile
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          cd /home/ubuntu/webapp/WebApp.CloudApi
-          rm -f .env
-          echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${AWS::StackName}-test-bucket-s3\nDatabaseName=${DBInstanceIdentifier}\nMasterUsername=${DBInstanceIdentifier}\nMasterPassword=${DBInstanceIdentifier}\nDatabasePort=5432\nSNSName=arn:aws:sns:us-east-1:954333181119:csye6225-sns\n" >> .env
-          dotnet publish WebApp.CloudApi.csproj --configuration Release
-          sudo systemctl enable webapp.service
-          sudo systemctl start webapp.service
-          sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
-          sudo systemctl status webapp.service
+      VpcId: !Ref VPC
+      CidrBlock: !Ref SubnetBCIDR
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-B
+
+  SubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref SubnetCCIDR
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-C
+
+  # WebAppInstance:
+  #   Type: "AWS::EC2::Instance"
+  #   Properties:
+  #     ImageId: !Ref AMIId
+  #     InstanceType: !Ref InstanceType
+  #     NetworkInterfaces:
+  #       - AssociatePublicIpAddress: true
+  #         DeviceIndex: "0"
+  #         GroupSet: [!Ref InstanceSecurityGroup]
+  #         SubnetId: !Ref SubnetA
+  #     BlockDeviceMappings:
+  #       - DeviceName: /dev/sda1
+  #         Ebs:
+  #           VolumeSize: !Ref RootVolumeSize
+  #           DeleteOnTermination: !Ref DeleteOnTermin
+  #     IamInstanceProfile: !Ref S3EC2InstanceProfile
+  #     UserData:
+  #       Fn::Base64: !Sub |
+  #         #!/bin/bash
+  #         cd /home/ubuntu/webapp/WebApp.CloudApi
+  #         rm -f .env
+  #         echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${AWS::StackName}-test-bucket-s3\nDatabaseName=${DBInstanceIdentifier}\nMasterUsername=${DBInstanceIdentifier}\nMasterPassword=${DBInstanceIdentifier}\nDatabasePort=5432\nSNSName=arn:aws:sns:us-east-1:954333181119:csye6225-sns\n" >> .env
+  #         dotnet publish WebApp.CloudApi.csproj --configuration Release
+  #         sudo systemctl enable webapp.service
+  #         sudo systemctl start webapp.service
+  #         sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
+  #         sudo systemctl status webapp.service
     
   S3EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -208,6 +246,7 @@ Resources:
       Path: /
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
 
   EC2InstanceS3Policy:
     Type: AWS::IAM::Policy
@@ -330,45 +369,21 @@ Resources:
       Protocol: "lambda"
       TopicArn: !Ref SNSTopic
 
-  myInlinePolicyForSNS:
-    Type: 'AWS::IAM::Policy'
-    Properties:
-      PolicyName: WebAppSNS # (required) give a name to this policy
-      PolicyDocument: # (required) JSON policy document
-        Version: '2012-10-17'
-        Statement: # allow read only access to all S3 buckets
-          - Effect: Allow
-            Action:
-              - 'sns:Publish'
-            Resource:
-            - !Join  ["",[!Ref SNSTopic]]
-      Roles:
-        -
-          !Ref S3EC2InstanceRole 
-
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      VpcId: !Ref VPC
       GroupName: "application"
       GroupDescription: "Allow HTTP/HTTPS and SSH and port 8080"
-      VpcId: !Ref VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -443,6 +458,8 @@ Resources:
   DBinstance:
     Type: AWS::RDS::DBInstance
     Properties:
+      StorageEncrypted: true
+      KmsKeyId: !Ref RdsKey
       DBInstanceClass: !Ref DBInstanceClass
       Engine: !Ref DatabaseEngine
       MasterUsername: !Ref MasterUsername
@@ -540,12 +557,310 @@ Resources:
     Properties:
       Domain: vpc
   DnsRecord:
-    Type: AWS::Route53::RecordSet
+    Type: AWS::Route53::RecordSetGroup
     Properties:
-      HostedZoneName: !Ref "HostedZoneName"
+      HostedZoneId: !Ref "HostedZoneID"
       Comment: DNS name for my instance.
-      Name: !Ref "HostedZoneName"
-      Type: A
-      TTL: "900"
-      ResourceRecords:
-        - !GetAtt WebAppInstance.PublicIp    
+      RecordSets:
+      - Name: !Ref HostedZoneName
+        Type: A
+        AliasTarget:
+          HostedZoneId: !GetAtt 'loadBalancer.CanonicalHostedZoneID'
+          DNSName: !GetAtt 'loadBalancer.DNSName'
+      # Name: !Ref "HostedZoneName"
+      # Type: A
+      # TTL: "900"
+      # ResourceRecords:
+      #   - !GetAtt WebAppInstance.PublicIp
+
+  asgLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DependsOn: VPC
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-launch-template'
+      LaunchTemplateData:
+        ImageId: !Ref AMIId
+        InstanceType: t2.micro
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: 
+              - Key: "Name"
+                Value: "cloudformation-ec2"
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref InstanceSecurityGroup
+            DeleteOnTermination: true      
+        # SecurityGroupIds:
+        #   - !Ref InstanceSecurityGroup
+        BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref RootVolumeSize
+            DeleteOnTermination: !Ref DeleteOnTermin
+        IamInstanceProfile: 
+          Arn: !GetAtt
+            - S3EC2InstanceProfile
+            - Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
+            cd /home/ubuntu/webapp/WebApp.CloudApi
+            rm -f .env
+            echo -e "Host=${DBinstance.Endpoint.Address}\nBucketName=${AWS::StackName}-test-bucket-s3\nDatabaseName=${DBInstanceIdentifier}\nMasterUsername=${DBInstanceIdentifier}\nMasterPassword=${DBInstanceIdentifier}\nDatabasePort=5432\nSNSName=arn:aws:sns:us-east-1:954333181119:csye6225-sns\n" >> .env
+            dotnet publish WebApp.CloudApi.csproj --configuration Release
+            sudo systemctl enable webapp.service
+            sudo systemctl start webapp.service
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080
+            "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a fetch-config \
+            -m ec2 \
+            -c file:/opt/aws/amazon-cloudwatch-agent/bin/cloudwatch-config.json \
+            -s"
+            sudo systemctl status webapp.service
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "ELB"
+      GroupDescription: "Allow HTTP/HTTPS"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0 
+
+  asgWebApp:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${AWS::StackName}-asg
+      AvailabilityZones:
+        - us-east-1a
+        - us-east-1b
+        - us-east-1c
+      Cooldown: '60'
+      DesiredCapacity: '1'
+      HealthCheckGracePeriod: 300
+      HealthCheckType: EC2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref asgLaunchTemplate
+        Version: !GetAtt asgLaunchTemplate.LatestVersionNumber
+      # LoadBalancerNames:
+      #   - String
+      MaxSize: '3'
+      MinSize: '1'
+      # NewInstancesProtectedFromScaleIn: true
+      Tags:
+        - Key: Application
+          Value: WebApp
+          PropagateAtLaunch: "true"
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-asg
+          PropagateAtLaunch: "true"
+      TargetGroupARNs:
+        - !Ref loadBalancerTargetGroup
+      VPCZoneIdentifier:
+        - !Ref SubnetA
+        - !Ref SubnetB
+        - !Ref SubnetC
+
+  # asgCPUPolicy:
+  #   Type: AWS::AutoScaling::ScalingPolicy
+  #   Properties:
+  #     AutoScalingGroupName: !Ref asgWebApp
+  #     PolicyType: TargetTrackingScaling
+  #     TargetTrackingConfiguration:
+  #       PredefinedMetricSpecification:
+  #         PredefinedMetricType: ASGAverageCPUUtilization
+  #       TargetValue: 40.0
+
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: asgWebApp
+      Cooldown: '60'
+      ScalingAdjustment: '1'
+
+  WebServerScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: asgWebApp
+      Cooldown: '60'
+      ScalingAdjustment: '-1'
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 5% for 1 minute
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '5'
+      AlarmActions:
+        - Ref: WebServerScaleUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value:
+            Ref: asgWebApp
+      ComparisonOperator: GreaterThanThreshold
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 3% for 1 minute
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '3'
+      AlarmActions:
+        - Ref: WebServerScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value:
+            Ref: asgWebApp
+      ComparisonOperator: LessThanThreshold
+
+
+  loadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: 
+      - AttachGateway
+      - asgLaunchTemplate
+    Properties:
+      IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Name: !Sub ${AWS::StackName}-load-balancer
+      Scheme: internet-facing
+      SecurityGroups:
+        - Ref: LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+        - !Ref SubnetC
+      Tags:
+        - Key: Application
+          Value: WebApp
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-load-balancer
+      Type: application
+
+  loadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 120
+      HealthCheckPath: '/healthz'
+      HealthCheckPort: '8080'
+      HealthCheckProtocol: 'HTTP'
+      HealthCheckTimeoutSeconds: 60
+      HealthyThresholdCount: 2
+      IpAddressType: ipv4
+      Name: !Sub ${AWS::StackName}-lb-tg
+      Port: 8080
+      Protocol: 'HTTP'
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-lb-tg
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '20'
+      TargetType: instance
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VPC
+
+  loadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: arn:aws:acm:us-east-1:954333181119:certificate/e384d855-3c3b-4aae-8dc6-d0cd4f84fd04
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref loadBalancerTargetGroup
+      LoadBalancerArn: !Ref loadBalancer
+      Port: 443
+      Protocol: HTTPS  
+
+  # KMS RDS encryption key
+  RdsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-rds
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  RdsAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/rds
+      TargetKeyId: !Ref RdsKey
+
+  EBSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-ebs
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  EBSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/ebs
+      TargetKeyId: !Ref EBSKey
+
+Outputs:
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+
+  PublicSubnets:
+    Description: A list of the public subnets
+    Value: !Join [ ",", [ !Ref SubnetA, !Ref SubnetB, !Ref SubnetC ]]
+
+  SubnetA:
+    Description: A reference to the public subnet in the 1st Availability Zone
+    Value: !Ref SubnetA
+
+  SubnetB:
+    Description: A reference to the public subnet in the 2nd Availability Zone
+    Value: !Ref SubnetB
+
+  SubnetC:
+    Description: A reference to the public subnet in the 3rd Availability Zone
+    Value: !Ref SubnetC
